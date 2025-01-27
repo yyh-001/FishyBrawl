@@ -26,3 +26,6 @@ yarn-error.log*
 # System
 .DS_Store
 Thumbs.db 
+
+# Test
+test.html

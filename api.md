@@ -1,6 +1,6 @@
-# 炉石酒馆战棋游戏后端 API 文档
+# Fishy Brawl 游戏后端 API 文档
 
-基于 Node.js 和 Express 框架开发的炉石酒馆战棋游戏后端服务，提供用户管理、游戏大厅和实时对战功能。
+基于 Node.js、Express 和 Socket.IO 框架开发的炉石酒馆战棋游戏后端服务，提供用户管理、游戏大厅和实时对战功能。
 
 ## 技术栈
 
@@ -12,7 +12,9 @@
 
 ## API 接口说明
 
-### 用户管理
+### HTTP 接口
+
+#### 用户管理
 
 #### 发送注册验证码
 - **POST** `/api/auth/verification-code`
@@ -400,82 +402,334 @@
 }
 ```
 
-### WebSocket 事件
+### WebSocket 接口
 
 #### 连接
+
+### 建立连接
 ```javascript
-socket.on('connect', callback)
-```
+import { io } from 'socket.io-client';
 
-#### 加入房间
-```javascript
-socket.emit('joinRoom', { roomId: 'string' })
-socket.on('roomJoined', callback)
-```
-
-#### 游戏事件
-```javascript
-// 回合开始
-socket.on('turnStart', { gold: number, turn: number })
-
-// 购买随从
-socket.emit('buyMinion', { position: number, minionId: string })
-
-// 出售随从
-socket.emit('sellMinion', { position: number })
-
-// 战斗开始
-socket.on('combatStart', { opponent: object })
-
-// 战斗结果
-socket.on('combatEnd', { damage: number, winner: string })
-```
-
-#### 匹配事件
-```javascript
-// 匹配状态更新
-socket.on('matchUpdate', { 
-    status: 'matching|matched|cancelled',
-    players?: [
-        {
-            userId: string,
-            username: string,
-            rating: number
-        }
-    ]
-})
-
-// 匹配成功
-socket.on('matchSuccess', {
-    roomId: string,
-    players: array
-})
-```
-
-#### 好友相关事件
-```javascript
-// 好友状态更新
-socket.on('friendStatusUpdate', {
-    userId: string,
-    status: 'online|offline|in_game'
-})
-
-// 收到好友请求
-socket.on('friendRequest', {
-    requestId: string,
-    fromUser: {
-        userId: string,
-        username: string
+// 创建连接
+const socket = io('http://localhost:3000', {
+    auth: {
+        token: 'your-jwt-token' // 从登录获取的 JWT token
     },
-    message: string
-})
-
-// 好友请求被处理
-socket.on('friendRequestProcessed', {
-    requestId: string,
-    status: 'accepted|rejected'
-})
+    transports: ['websocket'],   // 强制使用 WebSocket
+    reconnection: true,          // 启用重连
+    reconnectionAttempts: 5,     // 最大重连次数
+    reconnectionDelay: 1000,     // 重连延迟，单位毫秒
+    timeout: 10000               // 连接超时时间
+});
 ```
+
+### 连接事件
+```javascript
+// 连接成功
+socket.on('connect', () => {
+    console.log('WebSocket 连接成功');
+});
+
+// 连接错误
+socket.on('connect_error', (error) => {
+    console.log('WebSocket 连接失败:', error.message);
+    // 可能的错误消息：
+    // - 未提供认证令牌
+    // - 无效的认证令牌
+    // - 认证令牌已过期
+    // - 用户不存在
+    // - 认证失败
+});
+
+// 断开连接
+socket.on('disconnect', (reason) => {
+    console.log('WebSocket 断开连接:', reason);
+});
+
+// 重新连接
+socket.on('reconnect', (attemptNumber) => {
+    console.log('重新连接成功，尝试次数:', attemptNumber);
+});
+
+// 重新连接错误
+socket.on('reconnect_error', (error) => {
+    console.log('重新连接失败:', error);
+});
+```
+
+### React 组件示例
+```jsx
+import { useEffect, useState } from 'react';
+import { io } from 'socket.io-client';
+
+const GameLobby = () => {
+    const [socket, setSocket] = useState(null);
+    const [connected, setConnected] = useState(false);
+    const [error, setError] = useState(null);
+
+    useEffect(() => {
+        // 从本地存储获取 token
+        const token = localStorage.getItem('token');
+        if (!token) {
+            setError('未找到认证令牌');
+            return;
+        }
+
+        // 创建 socket 连接
+        const socket = io('http://localhost:3000', {
+            auth: { token },
+            transports: ['websocket'],
+            reconnection: true
+        });
+
+        // 连接事件处理
+        socket.on('connect', () => {
+            setConnected(true);
+            setError(null);
+        });
+
+        socket.on('connect_error', (error) => {
+            setConnected(false);
+            setError(error.message);
+        });
+
+        socket.on('disconnect', () => {
+            setConnected(false);
+        });
+
+        setSocket(socket);
+
+        // 清理函数
+        return () => {
+            socket.disconnect();
+        };
+    }, []);
+
+    // 组件渲染
+    if (error) {
+        return <div>连接错误: {error}</div>;
+    }
+
+    if (!connected) {
+        return <div>正在连接...</div>;
+    }
+
+    return (
+        <div>
+            <h1>游戏大厅</h1>
+            {/* 游戏大厅内容 */}
+        </div>
+    );
+};
+
+export default GameLobby;
+```
+
+#### 游戏大厅
+
+##### 获取房间列表
+```javascript
+// 发送请求
+socket.emit('getRooms', (response) => {
+    if (response.success) {
+        console.log('房间列表:', response.data.rooms);
+    }
+});
+
+// 成功响应
+{
+    success: true,
+    data: {
+        rooms: [
+            {
+                roomId: "string",
+                name: "string",
+                players: number,
+                maxPlayers: 8,
+                status: "waiting"
+            }
+        ]
+    }
+}
+```
+
+##### 创建房间
+```javascript
+// 发送请求
+socket.emit('createRoom', { 
+    name: "string"  // 房间名称
+}, (response) => {
+    if (response.success) {
+        console.log('房间创建成功:', response.data.roomId);
+    }
+});
+
+// 成功响应
+{
+    success: true,
+    data: {
+        roomId: "string"
+    }
+}
+```
+
+##### 加入房间
+```javascript
+// 发送请求
+socket.emit('joinRoom', { 
+    roomId: "string"  // 房间ID
+}, (response) => {
+    if (response.success) {
+        console.log('加入房间成功:', response.data);
+    }
+});
+
+// 成功响应
+{
+    success: true,
+    data: {
+        roomId: "string",
+        name: "string",
+        maxPlayers: 8,
+        status: "waiting",
+        createdBy: "string",
+        players: [
+            {
+                userId: "string",
+                username: "string",
+                ready: boolean,
+                isCreator: boolean
+            }
+        ],
+        alreadyInRoom: boolean,
+        isCreator: boolean
+    }
+}
+```
+
+##### 离开房间
+```javascript
+// 发送请求
+socket.emit('leaveRoom', { 
+    roomId: "string"  // 房间ID
+}, (response) => {
+    if (response.success) {
+        console.log('离开房间成功:', response.data);
+    }
+});
+
+// 成功响应
+{
+    success: true,
+    data: {
+        roomId: "string",
+        players: [
+            {
+                userId: "string",
+                username: "string",
+                ready: boolean,
+                isCreator: boolean
+            }
+        ]
+    }
+}
+
+// 如果房间被删除
+{
+    success: true,
+    data: {
+        deleted: true
+    }
+}
+```
+
+##### 准备/取消准备
+```javascript
+// 发送请求
+socket.emit('toggleReady', { 
+    roomId: "string"  // 房间ID
+}, (response) => {
+    if (response.success) {
+        console.log('准备状态更新成功:', response.data);
+    }
+});
+
+// 成功响应
+{
+    success: true,
+    data: {
+        roomId: "string",
+        players: [
+            {
+                userId: "string",
+                username: "string",
+                ready: boolean,
+                isCreator: boolean
+            }
+        ],
+        allReady: boolean
+    }
+}
+```
+
+#### 房间事件监听
+
+##### 房间列表更新
+```javascript
+socket.on('roomListUpdated', () => {
+    // 重新获取房间列表
+    socket.emit('getRooms', callback);
+});
+```
+
+##### 玩家加入房间
+```javascript
+socket.on('playerJoined', (data) => {
+    // data.players: 更新后的玩家列表
+});
+```
+
+##### 玩家离开房间
+```javascript
+socket.on('playerLeft', (data) => {
+    // data.players: 更新后的玩家列表
+});
+```
+
+##### 房间被删除
+```javascript
+socket.on('roomDeleted', (data) => {
+    // data.roomId: 被删除的房间ID
+});
+```
+
+##### 准备状态改变
+```javascript
+socket.on('readyStateChanged', (data) => {
+    // data.players: 更新后的玩家列表
+    // data.allReady: 是否所有玩家都已准备
+});
+```
+
+#### 错误处理
+
+所有 WebSocket 事件的错误响应格式：
+```javascript
+{
+    success: false,
+    error: "错误信息"
+}
+```
+
+常见错误：
+- 房间不存在
+- 房间已满
+- 您已在其他房间中
+- 您不在该房间中
+- 房主无需准备
+- 认证失败
+- 房间名长度应在1-50个字符之间
+- 无效的房间ID
 
 ## 数据模型
 
@@ -557,15 +811,13 @@ socket.on('friendRequestProcessed', {
 }
 ```
 
-## 错误码说明
+## 注意事项
 
-- 200: 成功
-- 400: 请求参数错误
-- 401: 未授权
-- 403: 禁止访问
-- 404: 资源不存在
-- 500: 服务器内部错误
-- 429: 请求过于频繁
-- 1001: 验证码错误或已过期
-- 1002: 邮箱已被注册
-- 1003: 重置密码令牌无效或已过期
+1. WebSocket 连接需要在请求头中提供有效的 JWT token
+2. 所有回调函数都采用 (error, response) 格式
+3. 房间相关的事件只会发送给相关的客户端
+4. 断线重连时需要重新加入之前的房间
+5. 房间会在1小时后自动删除
+6. 房间名长度限制：1-50个字符
+7. 每个房间最多8名玩家
+8. 房主不需要准备，其他玩家都准备后可以开始游戏

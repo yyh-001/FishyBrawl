@@ -1,4 +1,4 @@
-const { body, validationResult } = require('express-validator');
+const { body, validationResult, param } = require('express-validator');
 
 // 验证请求的中间件
 const validateRequest = (req, res, next) => {
