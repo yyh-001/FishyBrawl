@@ -193,17 +193,42 @@ class LobbyHandler {
         // 准备/取消准备
         socket.on('toggleReady', async (data, callback) => {
             try {
+                logger.info('玩家切换准备状态', {
+                    userId: socket.user._id,
+                    username: socket.user.username,
+                    roomId: data.roomId,
+                    timestamp: new Date().toISOString()
+                });
+
+                const error = this.validateRoomId(data.roomId);
+                if (error) {
+                    return callback({ success: false, error });
+                }
+
                 const result = await lobbyService.toggleReady(socket.user.id, data.roomId);
                 
-                // 通知房间内所有玩家
+                // 广播准备状态改变事件
                 this.io.to(`room:${data.roomId}`).emit('readyStateChanged', {
+                    roomId: data.roomId,
                     players: result.players,
-                    allReady: result.allReady
+                    allReady: result.allReady,
+                    changedPlayer: {
+                        userId: socket.user.id,
+                        username: socket.user.username,
+                        ready: result.readyState
+                    }
                 });
-                
+
                 callback({ success: true, data: result });
+
             } catch (error) {
-                logger.error('更新准备状态失败:', error);
+                logger.error('切换准备状态失败:', {
+                    userId: socket.user._id,
+                    username: socket.user.username,
+                    roomId: data.roomId,
+                    error: error.message,
+                    stack: error.stack
+                });
                 callback({ success: false, error: error.message });
             }
         });

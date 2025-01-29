@@ -283,27 +283,28 @@ class LobbyService {
                 throw new CustomError(400, '您不在该房间中');
             }
 
-            // 房主不需要准备
-            if (room.createdBy.toString() === userId) {
-                throw new CustomError(400, '房主无需准备');
-            }
-
             // 切换准备状态
             player.ready = !player.ready;
             await room.save();
 
-            return {
+            // 修改计算所有玩家准备状态的逻辑
+            const allReady = room.players.every(p => p.ready);
+
+            const result = {
                 roomId: room._id,
+                name: room.name,
                 players: room.players.map(p => ({
                     userId: p.userId,
                     username: p.username,
                     ready: p.ready,
                     isCreator: p.userId.toString() === room.createdBy.toString()
                 })),
-                allReady: room.players.every(p => 
-                    p.userId.toString() === room.createdBy.toString() || p.ready
-                )
+                allReady,
+                readyState: player.ready
             };
+
+            return result;
+
         } catch (error) {
             if (error.name === 'CastError') {
                 throw new CustomError(404, '房间不存在');

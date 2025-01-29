@@ -72,22 +72,81 @@ function initializeSocket(server) {
 
     // 连接事件
     io.on('connection', (socket) => {
-        logger.info('WebSocket 连接建立', {
+        logger.info('用户已连接:', {
+            socketId: socket.id,
             userId: socket.user._id,
-            username: socket.user.username,
-            connectionId: socket.id,
-            ip: socket.handshake.address,
-            timestamp: new Date().toISOString()
+            username: socket.user.username
         });
 
-        socket.on('disconnect', (reason) => {
-            logger.info('WebSocket 连接断开', {
+        // 更新用户状态为在线
+        User.findByIdAndUpdate(socket.user._id, { 
+            status: 'online',
+            lastOnline: new Date()
+        }).catch(error => {
+            logger.error('更新用户状态失败:', error);
+        });
+
+        // 将用户加入到专属房间
+        const userRoom = `user:${socket.user._id}`;
+        socket.join(userRoom);
+        
+        // 通知该用户的所有好友其上线状态
+        User.findById(socket.user._id)
+            .populate('friends', '_id')
+            .then(user => {
+                if (user && user.friends.length > 0) {
+                    const friendIds = user.friends.map(friend => `user:${friend._id}`);
+                    socket.to(friendIds).emit('friendStatusChanged', {
+                        userId: socket.user._id,
+                        username: socket.user.username,
+                        status: 'online'
+                    });
+                }
+            })
+            .catch(error => {
+                logger.error('通知好友状态变更失败:', error);
+            });
+
+        // 获取用户所在的所有房间
+        const rooms = Array.from(socket.rooms);
+        logger.info('用户当前所在房间:', {
+            socketId: socket.id,
+            userId: socket.user._id,
+            username: socket.user.username,
+            rooms: rooms
+        });
+
+        socket.on('disconnect', () => {
+            // 更新用户状态为离线
+            User.findByIdAndUpdate(socket.user._id, { 
+                status: 'offline',
+                lastOnline: new Date()
+            }).catch(error => {
+                logger.error('更新用户离线状态失败:', error);
+            });
+
+            // 通知该用户的所有好友其离线状态
+            User.findById(socket.user._id)
+                .populate('friends', '_id')
+                .then(user => {
+                    if (user && user.friends.length > 0) {
+                        const friendIds = user.friends.map(friend => `user:${friend._id}`);
+                        socket.to(friendIds).emit('friendStatusChanged', {
+                            userId: socket.user._id,
+                            username: socket.user.username,
+                            status: 'offline'
+                        });
+                    }
+                })
+                .catch(error => {
+                    logger.error('通知好友离线状态失败:', error);
+                });
+
+            logger.info('用户断开连接，离开房间:', {
+                socketId: socket.id,
                 userId: socket.user._id,
                 username: socket.user.username,
-                connectionId: socket.id,
-                reason: reason,
-                ip: socket.handshake.address,
-                timestamp: new Date().toISOString()
+                room: userRoom
             });
         });
 

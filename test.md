@@ -1008,3 +1008,148 @@ socket.on('connect_error', (error) => {});
    - 检查参数格式是否正确
    - 确认操作权限
    - 验证房间状态是否允许操作
+
+### 好友系统测试用例
+
+#### 1. 发送好友请求
+
+**发送请求**:
+```javascript
+socket.emit('sendFriendRequest', {
+    toUserId: 'valid_user_id',
+    message: '请求添加好友'
+}, (response) => {
+    console.log(response);
+});
+```
+
+**成功响应**:
+```javascript
+{
+    success: true,
+    data: {
+        requestId: "507f1f77bcf86cd799439011",
+        status: "pending",
+        requestSent: true,
+        message: "好友请求发送成功",
+        toUser: {
+            userId: "507f1f77bcf86cd799439012",
+            username: "player1"
+        }
+    }
+}
+```
+
+**错误响应**:
+```javascript
+{
+    success: false,
+    error: "错误信息", // 可能的错误：
+    // - 目标用户ID不能为空
+    // - 用户不存在
+    // - 该用户已经是您的好友
+    // - 已经发送过好友请求
+    requestSent: false
+}
+```
+
+#### 2. 处理好友请求
+
+**发送请求**:
+```javascript
+socket.emit('handleFriendRequest', {
+    requestId: 'valid_request_id',
+    action: 'accept' // 或 'reject'
+}, (response) => {
+    console.log(response);
+});
+```
+
+**成功响应**:
+```javascript
+{
+    success: true,
+    data: {
+        requestId: "507f1f77bcf86cd799439011",
+        status: "accepted", // 或 "rejected"
+        handled: true,
+        message: "好友请求接受成功", // 或 "好友请求拒绝成功"
+        fromUser: {
+            userId: "507f1f77bcf86cd799439012",
+            username: "player1"
+        }
+    }
+}
+```
+
+**错误响应**:
+```javascript
+{
+    success: false,
+    error: "错误信息", // 可能的错误：
+    // - 请求ID和处理动作不能为空
+    // - 好友请求不存在
+    // - 无权处理该请求
+    // - 该请求已被处理
+    // - 无效的操作
+    handled: false
+}
+```
+
+### 事件监听
+
+#### 1. 接收好友请求
+```javascript
+socket.on('friendRequestReceived', (data) => {
+    // data 格式:
+    // {
+    //     requestId: "507f1f77bcf86cd799439011",
+    //     fromUser: {
+    //         userId: "507f1f77bcf86cd799439012",
+    //         username: "player1"
+    //     },
+    //     message: "请求添加好友",
+    //     timestamp: "2024-01-20T12:00:00Z"
+    // }
+});
+```
+
+#### 2. 好友请求处理结果
+```javascript
+socket.on('friendRequestHandled', (data) => {
+    // data 格式:
+    // {
+    //     requestId: "507f1f77bcf86cd799439011",
+    //     status: "accepted", // 或 "rejected"
+    //     toUser: {
+    //         userId: "507f1f77bcf86cd799439013",
+    //         username: "player2"
+    //     },
+    //     timestamp: "2024-01-20T12:00:00Z"
+    // }
+});
+```
+
+### 注意事项
+
+1. 请求限制：
+   - 不能向自己发送好友请求
+   - 不能向已是好友的用户发送请求
+   - 不能重复发送请求
+   - 请求消息最大长度100字符
+
+2. 状态说明：
+   - requestSent: 标识请求是否已成功发送
+   - status: 请求的当前状态(pending/accepted/rejected)
+   - handled: 标识请求是否已被处理
+
+3. 错误处理：
+   - 所有错误响应都包含 success: false
+   - 错误响应包含具体的错误信息
+   - 请求发送失败时 requestSent 为 false
+   - 请求处理失败时 handled 为 false
+
+4. 实时通知：
+   - 发送请求后，目标用户会立即收到通知
+   - 处理请求后，发送者会立即收到结果通知
+   - 所有通知都包含时间戳

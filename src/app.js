@@ -6,6 +6,7 @@ const rateLimit = require('express-rate-limit');
 const http = require('http');
 const initializeSocket = require('./config/socket');
 const LobbyHandler = require('./socket/lobbyHandler');
+const FriendHandler = require('./socket/friendHandler');
 require('dotenv').config();
 
 const connectDB = require('./config/database');
@@ -79,11 +80,24 @@ app.use(errorHandler);
 
 // 初始化 WebSocket 处理器
 const lobbyHandler = new LobbyHandler(io);
+const friendHandler = new FriendHandler(io);
 
 // WebSocket 连接处理
 io.on('connection', (socket) => {
-    logger.info(`用户连接: ${socket.user.username}`);
+    logger.info('新的 WebSocket 连接:', {
+        socketId: socket.id,
+        user: socket.user,
+        time: new Date().toISOString()
+    });
+    
+    // 初始化大厅处理器
     lobbyHandler.initialize(socket);
+    
+    // 初始化好友处理器
+    friendHandler.initialize(socket);
+    
+    // 将用户加入到专属房间
+    socket.join(`user:${socket.user._id}`);
 });
 
 // 启动服务器
