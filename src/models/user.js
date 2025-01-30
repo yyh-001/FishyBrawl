@@ -33,7 +33,7 @@ const userSchema = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['online', 'offline'],
+        enum: ['offline', 'online', 'in_game'],
         default: 'offline'
     },
     lastOnline: {

@@ -1153,3 +1153,190 @@ socket.on('friendRequestHandled', (data) => {
    - 发送请求后，目标用户会立即收到通知
    - 处理请求后，发送者会立即收到结果通知
    - 所有通知都包含时间戳
+
+
+### 房间邀请测试用例
+
+#### 1. 邀请好友加入房间
+
+**发送请求**:
+```javascript
+socket.emit('inviteToRoom', {
+    friendId: 'valid_friend_id',
+    roomId: 'valid_room_id'
+}, (response) => {
+    console.log(response);
+});
+```
+
+**成功响应**:
+```javascript
+{
+    success: true,
+    data: {
+        message: '邀请已发送'
+    }
+}
+```
+
+**错误响应**:
+```javascript
+{
+    success: false,
+    error: "错误信息" // 可能的错误：
+    // - 房间不存在
+    // - 您不在该房间中
+    // - 好友不存在
+    // - 该好友已在房间中
+    // - 房间已满
+    // - 房间已开始游戏
+    // - 该用户不是您的好友
+}
+```
+
+#### 2. 接收房间邀请
+
+**事件监听**:
+```javascript
+socket.on('roomInvitation', (data) => {
+    console.log('收到房间邀请:', data);
+    // data 格式:
+    // {
+    //     roomId: "507f1f77bcf86cd799439011",
+    //     roomName: "欢乐对战",
+    //     inviter: {
+    //         userId: "507f1f77bcf86cd799439012",
+    //         username: "player1"
+    //     },
+    //     currentPlayers: 2,
+    //     maxPlayers: 8
+    // }
+});
+```
+
+#### 3. 处理房间邀请
+
+**发送请求**:
+```javascript
+socket.emit('handleRoomInvitation', {
+    roomId: 'valid_room_id',
+    accept: true // 或 false
+}, (response) => {
+    console.log(response);
+});
+```
+
+**成功响应 (接受邀请)**:
+```javascript
+{
+    success: true,
+    data: {
+        success: true,
+        roomData: {
+            roomId: "507f1f77bcf86cd799439011",
+            name: "欢乐对战",
+            players: [
+                {
+                    userId: "507f1f77bcf86cd799439012",
+                    username: "player1",
+                    ready: false
+                },
+                {
+                    userId: "507f1f77bcf86cd799439013",
+                    username: "player2",
+                    ready: false
+                }
+            ],
+            maxPlayers: 8,
+            status: "waiting"
+        }
+    }
+}
+```
+
+**成功响应 (拒绝邀请)**:
+```javascript
+{
+    success: true,
+    data: {
+        success: false,
+        message: "已拒绝邀请"
+    }
+}
+```
+
+**错误响应**:
+```javascript
+{
+    success: false,
+    error: "错误信息" // 可能的错误：
+    // - 房间不存在或已解散
+    // - 房间已满
+    // - 房间已开始游戏
+    // - 您已在该房间中
+    // - 用户不存在
+}
+```
+
+#### 4. 邀请响应通知
+
+**事件监听**:
+```javascript
+socket.on('roomInviteResponse', (data) => {
+    console.log('邀请响应:', data);
+    // data 格式:
+    // {
+    //     success: true/false,
+    //     friendName: "player2",
+    //     message: "已加入房间" // 或 "拒绝了邀请"
+    // }
+});
+```
+
+### 测试场景
+
+1. 正常邀请流程：
+   - 发送邀请给在线好友
+   - 好友接收到邀请
+   - 好友接受邀请
+   - 邀请者收到接受通知
+   - 好友成功加入房间
+
+2. 拒绝邀请流程：
+   - 发送邀请给在线好友
+   - 好友接收到邀请
+   - 好友拒绝邀请
+   - 邀请者收到拒绝通知
+
+3. 错误场景测试：
+   - 邀请不存在的用户
+   - 邀请非好友用户
+   - 邀请已在房间中的好友
+   - 房间已满时发送邀请
+   - 房间已开始游戏时发送邀请
+   - 不在房间中发送邀请
+   - 处理已失效的邀请
+
+### 注意事项
+
+1. 邀请限制：
+   - 只能邀请好友关系的用户
+   - 只能邀请不在当前房间的用户
+   - 房间必须处于等待状态
+   - 房间不能已满
+
+2. 响应处理：
+   - 接受邀请后自动加入房间
+   - 所有玩家会收到新玩家加入通知
+   - 房间列表会自动更新
+   - 邀请者会收到处理结果通知
+
+3. 错误处理：
+   - 所有错误响应都包含具体错误信息
+   - 邀请发送失败时通知邀请者
+   - 处理邀请失败时通知被邀请者
+
+4. 实时通知：
+   - 邀请发送后立即通知被邀请者
+   - 邀请处理后立即通知邀请者
+   - 加入房间后通知所有房间成员

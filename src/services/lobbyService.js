@@ -2,6 +2,7 @@ const Room = require('../models/room');
 const MatchQueue = require('../models/matchQueue');
 const User = require('../models/user');
 const CustomError = require('../utils/customError');
+const logger = require('../utils/logger');
 
 class LobbyService {
     // 获取房间列表
@@ -28,7 +29,7 @@ class LobbyService {
     }
 
     // 创建房间
-    async createRoom(userId, name, maxPlayers) {
+    async createRoom(userId, name, maxPlayers = 8) {
         const user = await User.findById(userId);
         if (!user) {
             throw new CustomError(404, '用户不存在');
@@ -44,31 +45,31 @@ class LobbyService {
             throw new CustomError(400, '您已在其他房间中');
         }
 
-        const room = await Room.create({
+        const room = new Room({
             name,
-            maxPlayers: maxPlayers || 8,
+            maxPlayers,
             createdBy: userId,
             players: [{
                 userId,
                 username: user.username,
-                ready: false
+                ready: false,
+                isCreator: true
             }],
             status: 'waiting'
         });
 
+        await room.save();
+
         return {
             roomId: room._id,
+            _id: room._id,
             name: room.name,
+            players: room.players,
             maxPlayers: room.maxPlayers,
             status: room.status,
             createdBy: room.createdBy,
-            players: [{
-                userId: user._id,
-                username: user.username,
-                ready: false,
-                isCreator: true
-            }],
-            isCreator: true
+            createdAt: room.createdAt,
+            updatedAt: room.updatedAt
         };
     }
 
@@ -319,6 +320,147 @@ class LobbyService {
             'players.userId': userId,
             status: 'waiting'
         });
+    }
+
+    // 邀请好友加入房间
+    async inviteToRoom(userId, friendId, roomId) {
+        // 检查房间是否存在
+        const room = await Room.findById(roomId);
+        if (!room) {
+            throw new CustomError(404, '房间不存在');
+        }
+
+        // 检查是否是房间成员
+        const isInRoom = room.players.some(p => p.userId.toString() === userId);
+        if (!isInRoom) {
+            throw new CustomError(403, '您不在该房间中');
+        }
+
+        // 检查好友是否存在
+        const friend = await User.findById(friendId);
+        if (!friend) {
+            throw new CustomError(404, '好友不存在');
+        }
+
+        // 检查好友是否在线
+        if (friend.status !== 'online') {
+            throw new CustomError(400, '好友不在线');
+        }
+
+        // 检查是否已在房间中
+        const friendInRoom = room.players.some(p => p.userId.toString() === friendId);
+        if (friendInRoom) {
+            throw new CustomError(400, '该好友已在房间中');
+        }
+
+        // 检查房间是否已满
+        if (room.players.length >= room.maxPlayers) {
+            throw new CustomError(400, '房间已满');
+        }
+
+        // 检查房间状态
+        if (room.status !== 'waiting') {
+            throw new CustomError(400, '房间已开始游戏');
+        }
+
+        // 检查是否是好友关系
+        const areFriends = await this.checkFriendship(userId, friendId);
+        if (!areFriends) {
+            throw new CustomError(403, '该用户不是您的好友');
+        }
+
+        return {
+            roomId: room._id,
+            roomName: room.name,
+            inviter: {
+                userId,
+                username: room.players.find(p => p.userId.toString() === userId)?.username
+            },
+            currentPlayers: room.players.length,
+            maxPlayers: room.maxPlayers
+        };
+    }
+
+    // 处理好友邀请响应
+    async handleRoomInvitation(userId, roomId, accept) {
+        // 检查房间是否存在
+        const room = await Room.findById(roomId);
+        if (!room) {
+            throw new CustomError(404, '房间不存在或已解散');
+        }
+
+        // 检查用户是否存在
+        const user = await User.findById(userId);
+        if (!user) {
+            throw new CustomError(404, '用户不存在');
+        }
+
+        // 如果接受邀请
+        if (accept) {
+            // 检查用户是否已在其他房间
+            const existingRoom = await Room.findOne({
+                'players.userId': userId,
+                status: 'waiting'
+            });
+
+            if (existingRoom) {
+                throw new CustomError(400, '您已在其他房间中');
+            }
+
+            // 再次检查房间是否已满
+            if (room.players.length >= room.maxPlayers) {
+                throw new CustomError(400, '房间已满');
+            }
+
+            // 检查房间状态
+            if (room.status !== 'waiting') {
+                throw new CustomError(400, '房间已开始游戏');
+            }
+
+            // 将用户添加到房间
+            room.players.push({
+                userId: user._id,
+                username: user.username,
+                ready: false
+            });
+
+            await room.save();
+
+            return {
+                success: true,
+                roomData: {
+                    _id: room._id,
+                    roomId: room._id,
+                    name: room.name,
+                    players: room.players.map(p => ({
+                        userId: p.userId,
+                        username: p.username,
+                        ready: p.ready,
+                        isCreator: p.userId.toString() === room.createdBy.toString()
+                    })),
+                    maxPlayers: room.maxPlayers,
+                    status: room.status,
+                    createdBy: room.createdBy,
+                    createdAt: room.createdAt,
+                    updatedAt: room.updatedAt
+                }
+            };
+        }
+
+        // 如果拒绝邀请
+        return {
+            success: false,
+            message: '已拒绝邀请'
+        };
+    }
+
+    // 检查好友关系
+    async checkFriendship(userId1, userId2) {
+        const user = await User.findById(userId1);
+        if (!user) {
+            throw new CustomError(404, '用户不存在');
+        }
+        return user.friends.some(friendId => friendId.toString() === userId2.toString());
     }
 }
 

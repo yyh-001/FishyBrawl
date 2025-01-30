@@ -1,5 +1,8 @@
 const lobbyService = require('../services/lobbyService');
 const logger = require('../utils/logger');
+const Room = require('../models/room');
+const User = require('../models/user');
+const CustomError = require('../utils/customError');
 
 class LobbyHandler {
     constructor(io) {
@@ -120,115 +123,123 @@ class LobbyHandler {
         });
 
         // 离开房间
-        socket.on('leaveRoom', async (data, callback) => {
+        socket.on('leaveRoom', async (callback) => {
             try {
-                logger.info('玩家尝试离开房间', {
+                logger.info('玩家请求离开房间', {
                     userId: socket.user._id,
                     username: socket.user.username,
-                    connectionId: socket.id,
-                    timestamp: new Date().toISOString()
+                    socketId: socket.id
                 });
 
-                // 先查找用户所在的房间
-                const room = await lobbyService.findUserRoom(socket.user.id);
+                // 获取玩家当前所在的房间
+                const room = await Room.findOne({
+                    'players.userId': socket.user._id,
+                    status: 'waiting'
+                });
+
                 if (!room) {
-                    logger.warn('用户不在任何房间中', {
-                        userId: socket.user._id,
-                        username: socket.user.username
-                    });
-                    return callback({ success: false, error: '您不在任何房间中' });
+                    return callback({ success: true });
                 }
 
-                const result = await lobbyService.leaveRoom(socket.user.id, room._id);
-                
+                // 从房间中移除玩家
+                await Room.updateOne(
+                    { _id: room._id },
+                    { $pull: { players: { userId: socket.user._id } } }
+                );
+
                 // 离开 socket room
                 socket.leave(`room:${room._id}`);
-                
-                if (result.deleted) {
-                    // 如果房间被删除，通知所有客户端
-                    this.io.emit('roomDeleted', { roomId: room._id });
+
+                // 获取更新后的房间数据
+                const updatedRoom = await Room.findById(room._id);
+
+                // 如果房间没有玩家了，删除房间
+                if (!updatedRoom.players.length) {
+                    await Room.deleteOne({ _id: room._id });
+                    this.io.to(`room:${room._id}`).emit('roomDeleted');
                 } else {
                     // 通知房间内其他玩家
                     this.io.to(`room:${room._id}`).emit('playerLeft', {
-                        roomId: room._id,
-                        userId: socket.user.id,
-                        players: result.players.map(player => ({
-                            userId: player.userId,
-                            username: player.username,
-                            ready: player.ready,
-                            isCreator: player.userId.toString() === result.createdBy?.toString()
-                        }))
+                        userId: socket.user._id,
+                        username: socket.user.username
+                    });
+
+                    // 广播更新后的房间数据
+                    this.io.to(`room:${room._id}`).emit('roomUpdated', {
+                        roomId: updatedRoom._id,
+                        name: updatedRoom.name,
+                        players: updatedRoom.players,
+                        maxPlayers: updatedRoom.maxPlayers,
+                        status: updatedRoom.status,
+                        createdBy: updatedRoom.createdBy
                     });
                 }
-                
-                logger.info('玩家成功离开房间', {
-                    userId: socket.user._id,
-                    username: socket.user.username,
-                    roomId: room._id,
-                    roomName: room.name,
-                    deleted: result.deleted,
-                    remainingPlayers: result.players?.length || 0,
-                    connectionId: socket.id,
-                    timestamp: new Date().toISOString()
-                });
 
                 // 广播房间列表更新
                 this.io.emit('roomListUpdated');
-                
-                callback({ success: true, data: result });
+
+                callback({ success: true });
             } catch (error) {
-                logger.error('离开房间失败', {
-                    userId: socket.user._id,
-                    username: socket.user.username,
-                    error: error.message,
-                    errorName: error.name,
-                    stack: error.stack,
-                    connectionId: socket.id,
-                    timestamp: new Date().toISOString()
-                });
+                logger.error('离开房间失败:', error);
                 callback({ success: false, error: error.message });
             }
         });
 
-        // 准备/取消准备
+        // 处理准备状态切换
         socket.on('toggleReady', async (data, callback) => {
             try {
-                logger.info('玩家切换准备状态', {
-                    userId: socket.user._id,
-                    username: socket.user.username,
-                    roomId: data.roomId,
-                    timestamp: new Date().toISOString()
-                });
-
-                const error = this.validateRoomId(data.roomId);
-                if (error) {
-                    return callback({ success: false, error });
+                const { roomId } = data;
+                
+                // 获取房间信息
+                const room = await Room.findById(roomId);
+                if (!room) {
+                    throw new Error('房间不存在');
                 }
 
-                const result = await lobbyService.toggleReady(socket.user.id, data.roomId);
+                // 找到当前玩家
+                const player = room.players.find(p => 
+                    p.userId.toString() === socket.user._id.toString()
+                );
                 
-                // 广播准备状态改变事件
-                this.io.to(`room:${data.roomId}`).emit('readyStateChanged', {
-                    roomId: data.roomId,
-                    players: result.players,
-                    allReady: result.allReady,
+                if (!player) {
+                    throw new Error('您不在该房间中');
+                }
+
+                // 切换准备状态
+                player.ready = !player.ready;
+                await room.save();
+
+                // 检查是否所有玩家都准备好了
+                const allReady = room.players.length > 1 && 
+                    room.players.every(p => p.ready);
+
+                // 广播准备状态变化
+                this.io.to(`room:${roomId}`).emit('readyStateChanged', {
+                    roomId,
+                    players: room.players.map(p => ({
+                        userId: p.userId,
+                        username: p.username,
+                        ready: p.ready,
+                        isCreator: p.userId.toString() === room.createdBy.toString()
+                    })),
                     changedPlayer: {
-                        userId: socket.user.id,
-                        username: socket.user.username,
-                        ready: result.readyState
+                        userId: player.userId,
+                        username: player.username,
+                        ready: player.ready
+                    },
+                    allReady
+                });
+
+                callback({ 
+                    success: true,
+                    data: {
+                        ready: player.ready,
+                        allReady
                     }
                 });
 
-                callback({ success: true, data: result });
-
             } catch (error) {
-                logger.error('切换准备状态失败:', {
-                    userId: socket.user._id,
-                    username: socket.user.username,
-                    roomId: data.roomId,
-                    error: error.message,
-                    stack: error.stack
-                });
+                logger.error('准备状态切换失败:', error);
                 callback({ success: false, error: error.message });
             }
         });
@@ -318,6 +329,199 @@ class LobbyHandler {
                 });
             }
         });
+
+        // 处理邀请好友加入房间
+        socket.on('inviteToRoom', async (data, callback) => {
+            try {
+                const { friendId, roomId, userId } = data;
+                
+                logger.info('收到邀请好友请求:', {
+                    friendId,
+                    roomId,
+                    userId,
+                    socketUserId: socket.user._id
+                });
+
+                // 检查房间是否存在
+                const room = await Room.findById(roomId);
+                if (!room) {
+                    throw new CustomError(404, '房间不存在');
+                }
+
+                // 检查是否是房间成员
+                const isInRoom = room.players.some(p => 
+                    p.userId.toString() === socket.user._id.toString() || 
+                    p.userId.toString() === userId.toString()
+                );
+                
+                logger.info('检查用户是否在房间中:', {
+                    isInRoom,
+                    userId: socket.user._id,
+                    players: room.players.map(p => p.userId.toString()),
+                    roomId: room._id
+                });
+
+                if (!isInRoom) {
+                    throw new CustomError(403, '您不在该房间中');
+                }
+
+                // 检查好友是否存在
+                const friend = await User.findById(friendId);
+                if (!friend) {
+                    throw new CustomError(404, '好友不存在');
+                }
+
+                // 检查好友是否在线
+                if (friend.status !== 'online') {
+                    throw new CustomError(400, '好友不在线');
+                }
+
+                // 检查是否已在房间中
+                const friendInRoom = room.players.some(p => p.userId.toString() === friendId);
+                if (friendInRoom) {
+                    throw new CustomError(400, '该好友已在房间中');
+                }
+
+                // 检查房间是否已满
+                if (room.players.length >= room.maxPlayers) {
+                    throw new CustomError(400, '房间已满');
+                }
+
+                // 检查房间状态
+                if (room.status !== 'waiting') {
+                    throw new CustomError(400, '房间已开始游戏');
+                }
+
+                // 检查是否是好友关系
+                const areFriends = await lobbyService.checkFriendship(socket.user._id, friendId);
+                if (!areFriends) {
+                    throw new CustomError(403, '该用户不是您的好友');
+                }
+
+                // 向好友发送邀请
+                logger.info('准备向好友发送邀请:', {
+                    friendId,
+                    roomId: room._id,
+                    inviter: socket.user.username,
+                    socketRooms: Array.from(socket.rooms),
+                    friendSocketId: this.io.sockets.adapter.rooms.get(`user:${friendId}`)
+                })
+
+                this.io.to(`user:${friendId}`).emit('roomInvitation', {
+                    roomId: room._id,
+                    roomName: room.name,
+                    inviter: {
+                        userId: socket.user._id,
+                        username: socket.user.username
+                    },
+                    currentPlayers: room.players.length,
+                    maxPlayers: room.maxPlayers,
+                    roomData: {
+                        _id: room._id,
+                        roomId: room._id,
+                        name: room.name,
+                        players: room.players,
+                        maxPlayers: room.maxPlayers,
+                        status: room.status,
+                        createdBy: room.createdBy,
+                        createdAt: room.createdAt,
+                        updatedAt: room.updatedAt
+                    }
+                })
+
+                logger.info('邀请已发送')
+
+                callback({
+                    success: true,
+                    data: { message: '邀请已发送' }
+                });
+
+            } catch (error) {
+                logger.error('处理邀请好友失败:', error);
+                callback({
+                    success: false,
+                    error: error.message
+                });
+            }
+        });
+
+        // 处理邀请响应
+        socket.on('handleRoomInvitation', async (data, callback) => {
+            try {
+                const { roomId, accept } = data;
+                const userId = socket.user._id;
+
+                logger.info('玩家响应房间邀请', {
+                    userId,
+                    roomId,
+                    accept,
+                    timestamp: new Date().toISOString()
+                });
+
+                const result = await lobbyService.handleRoomInvitation(userId, roomId, accept);
+
+                if (result.success) {
+                    // 如果接受邀请，加入房间
+                    socket.join(`room:${roomId}`);
+
+                    // 通知房间所有玩家
+                    this.io.to(`room:${roomId}`).emit('playerJoined', {
+                        roomId,
+                        newPlayer: {
+                            userId: socket.user._id,
+                            username: socket.user.username,
+                            ready: false
+                        },
+                        players: result.roomData.players
+                    });
+
+                    // 更新房间列表
+                    this.io.emit('roomListUpdated');
+                }
+
+                // 通知邀请者处理结果
+                const room = await Room.findById(roomId);
+                if (room) {
+                    const inviter = room.players.find(p => p.isCreator);
+                    if (inviter) {
+                        this.io.to(`user:${inviter.userId}`).emit('roomInviteResponse', {
+                            success: accept,
+                            friendName: socket.user.username,
+                            message: accept ? '已加入房间' : '拒绝了邀请'
+                        });
+                    }
+                }
+
+                callback({
+                    success: true,
+                    data: result
+                });
+
+            } catch (error) {
+                logger.error('处理房间邀请失败:', error);
+                callback({
+                    success: false,
+                    error: error.message
+                });
+            }
+        });
+
+        // 加入用户专属房间
+        socket.on('joinUserRoom', (userId, callback) => {
+            try {
+                const roomName = `user:${userId}`
+                socket.join(roomName)
+                logger.info('用户加入专属房间:', {
+                    userId,
+                    roomName,
+                    socketId: socket.id
+                })
+                callback({ success: true })
+            } catch (error) {
+                logger.error('加入用户专属房间失败:', error)
+                callback({ success: false, error: error.message })
+            }
+        })
     }
 
     // 处理匹配逻辑
