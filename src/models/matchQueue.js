@@ -15,11 +15,16 @@ const matchQueueSchema = new mongoose.Schema({
         enum: ['matching', 'matched', 'cancelled'],
         default: 'matching'
     },
-    createdAt: {
+    startTime: {
         type: Date,
-        default: Date.now,
-        expires: 300 // 5分钟后自动删除
+        default: Date.now
+    },
+    matchedRoom: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Room'
     }
+}, {
+    timestamps: true
 });
 
 module.exports = mongoose.model('MatchQueue', matchQueueSchema); 

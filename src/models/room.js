@@ -8,32 +8,48 @@ const roomSchema = new mongoose.Schema({
     },
     maxPlayers: {
         type: Number,
-        default: 8,
-        min: 2,
-        max: 8
+        required: true,
+        default: 8
     },
     players: [{
         userId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'User'
+            type: String,
+            required: true,
         },
         username: String,
+        ready: {
+            type: Boolean,
+            default: false
+        },
+        isBot: {
+            type: Boolean,
+            default: false
+        },
+        availableHeroes: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Hero'
+        }],
+        selectedHero: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Hero'
+        },
         health: {
             type: Number,
             default: 40
         },
         board: [{
             type: Object
-        }],
-        ready: {
-            type: Boolean,
-            default: false
-        }
+        }]
     }],
     status: {
         type: String,
-        enum: ['waiting', 'playing', 'finished'],
+        enum: ['waiting', 'selecting', 'playing', 'finished'],
         default: 'waiting'
+    },
+    isMatchRoom: {
+        type: Boolean,
+        default: false,
+        index: true
     },
     turn: {
         type: Number,
@@ -48,6 +64,10 @@ const roomSchema = new mongoose.Schema({
         type: Date,
         default: Date.now,
         expires: 3600 // 1小时后自动删除
+    },
+    updatedAt: {
+        type: Date,
+        default: Date.now
     }
 });
 

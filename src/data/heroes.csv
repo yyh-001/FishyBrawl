@@ -1,0 +1,16 @@
+﻿name,description,health,ability_name,ability_description,ability_type,ability_cost,ability_effect
+外卖小哥,机动性强，善于快速支援,40,快速配送,使一个随从获得冲锋效果,active,2,charge_minion
+美食主播,资源获取，随从发现,40,美食鉴赏,发现一个当前酒馆等级的美食随从,active,2,discover_current_tier
+健身教练,强化随从，提升生存能力,40,增肌训练,使一个随从获得+2生命值,active,3,buff_health_2
+网红主播,经济效益，资源积累,40,带货,刷新酒馆时有20%概率免费,passive,0,refresh_discount_20
+创业老板,经济优势，后期发力,40,融资,每回合额外获得1金币,passive,0,coin_bonus_1
+数据分析师,信息优势，策略制定,40,数据挖掘,随机查看对手手牌中的一张卡牌,active,2,inspect_opponent_hand_1
+游戏主播,增强随从，吸引火力,40,观众加成,使一个随从获得+1/+1，并获得嘲讽,active,3,buff_1_1_taunt
+画家,随机应变，灵活性,40,创意灵感,随机获得一张1星随从卡牌,active,1,discover_tier_1_random
+教师,稳定增益，适合前期过渡,40,课堂点名,随机使一个友方随从获得+1/+1,active,1,buff_random_friendly_1_1
+快递员,爆发输出，契合快递时效性,40,极速送达,使一个随从本回合可以攻击两次（但第二次攻击后休眠一回合）,active,2,double_attack_sleep
+出租车司机,经济流玩法,40,绕路收费,每当你刷新酒馆时，有30%概率返还1金币,passive,0,refresh_refund_30
+学生,随机应变，贴合临时抱佛脚,40,考前突击,抽一张牌，若为1星随从，其费用减少1金币,active,1,discount_tier_1_card
+图书管理员,干扰对手节奏,40,安静！,本回合对手无法使用英雄技能,active,0,disable_hero_power
+园丁,灵活治疗/增益,40,浇水,使一个随从恢复3点生命值，若满血则改为+1攻击力,active,1,heal_3_or_attack_1
+咖啡师,随机保护,40,拉花特调,随机使一个友方随从获得圣盾或嘲讽,active,2,random_divine_shield_or_taunt 
