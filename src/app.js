@@ -12,6 +12,7 @@ require('dotenv').config();
 const connectDB = require('./config/database');
 const errorHandler = require('./middlewares/errorHandler');
 const logger = require('./utils/logger');
+require('./services/cleanupService');
 
 // 创建 Express 应用
 const app = express();

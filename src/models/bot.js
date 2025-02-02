@@ -14,10 +14,17 @@ const botSchema = new mongoose.Schema({
         type: Number,
         default: 1000
     },
+    availableHeroes: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Hero'
+    }],
+    selectedHero: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Hero'
+    },
     roomId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Room',
-        required: true
+        ref: 'Room'
     },
     createdAt: {
         type: Date,
@@ -25,5 +32,10 @@ const botSchema = new mongoose.Schema({
         expires: 3600 // 1小时后自动删除
     }
 });
+
+// 添加索引
+botSchema.index({ botId: 1 });
+botSchema.index({ roomId: 1 });
+botSchema.index({ createdAt: 1 }, { expireAfterSeconds: 3600 });
 
 module.exports = mongoose.model('Bot', botSchema); 

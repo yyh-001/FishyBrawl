@@ -124,66 +124,101 @@ class LobbyHandler {
             }
         });
 
-        // 离开房间
-        socket.on('leaveRoom', async (callback) => {
+        // 处理玩家离开房间
+        socket.on('leaveRoom', async (roomId) => {
             try {
                 logger.info('玩家请求离开房间', {
+                    socketId: socket.id,
+                    timestamp: new Date().toISOString(),
                     userId: socket.user._id,
-                    username: socket.user.username,
-                    socketId: socket.id
+                    username: socket.user.username
                 });
 
-                // 获取玩家当前所在的房间
-                const room = await Room.findOne({
-                    'players.userId': socket.user._id,
-                    status: 'waiting'
-                });
-
-                if (!room) {
-                    return callback({ success: true });
+                // 确保 roomId 存在
+                if (!roomId) {
+                    throw new Error('房间ID不能为空');
                 }
 
                 // 从房间中移除玩家
-                await Room.updateOne(
-                    { _id: room._id },
-                    { $pull: { players: { userId: socket.user._id } } }
-                );
-
-                // 离开 socket room
-                socket.leave(`room:${room._id}`);
-
-                // 获取更新后的房间数据
-                const updatedRoom = await Room.findById(room._id);
-
-                // 如果房间没有玩家了，删除房间
-                if (!updatedRoom.players.length) {
-                    await Room.deleteOne({ _id: room._id });
-                    this.io.to(`room:${room._id}`).emit('roomDeleted');
-                } else {
-                    // 通知房间内其他玩家
-                    this.io.to(`room:${room._id}`).emit('playerLeft', {
-                        userId: socket.user._id,
-                        username: socket.user.username
-                    });
-
-                    // 广播更新后的房间数据
-                    this.io.to(`room:${room._id}`).emit('roomUpdated', {
-                        roomId: updatedRoom._id,
-                        name: updatedRoom.name,
-                        players: updatedRoom.players,
-                        maxPlayers: updatedRoom.maxPlayers,
-                        status: updatedRoom.status,
-                        createdBy: updatedRoom.createdBy
-                    });
+                const room = await Room.findById(roomId);
+                if (!room) {
+                    throw new Error('房间不存在');
                 }
 
-                // 广播房间列表更新
-                this.io.emit('roomListUpdated');
+                // 更新房间玩家列表
+                room.players = room.players.filter(p => p.userId.toString() !== socket.user._id.toString());
+                await room.save();
 
-                callback({ success: true });
+                // 离开 socket room
+                socket.leave(`room:${roomId}`);
+
+                // 广播玩家离开消息
+                this.io.to(`room:${roomId}`).emit('playerLeft', {
+                    userId: socket.user._id,
+                    username: socket.user.username
+                });
+
+                logger.info('玩家成功离开房间', {
+                    socketId: socket.id,
+                    roomId,
+                    userId: socket.user._id,
+                    username: socket.user.username,
+                    timestamp: new Date().toISOString()
+                });
+
             } catch (error) {
-                logger.error('离开房间失败:', error);
-                callback({ success: false, error: error.message });
+                logger.error('离开房间失败:', {
+                    error,
+                    stack: error.stack,
+                    timestamp: new Date().toISOString()
+                });
+
+                socket.emit('error', {
+                    message: '离开房间失败',
+                    details: error.message
+                });
+            }
+        });
+
+        // 处理断开连接
+        socket.on('disconnect', async () => {
+            try {
+                logger.info('玩家断开连接', {
+                    socketId: socket.id,
+                    userId: socket.user?._id,
+                    username: socket.user?.username,
+                    timestamp: new Date().toISOString()
+                });
+
+                if (socket.user) {
+                    // 查找玩家所在的房间
+                    const room = await Room.findOne({
+                        'players.userId': socket.user._id,
+                        status: { $in: ['waiting'] }  // 只处理等待中的房间
+                    });
+
+                    if (room) {
+                        // 更新房间玩家列表
+                        room.players = room.players.filter(p => p.userId.toString() !== socket.user._id.toString());
+                        await room.save();
+
+                        // 广播玩家离开消息
+                        this.io.to(`room:${room._id}`).emit('playerLeft', {
+                            userId: socket.user._id,
+                            username: socket.user.username
+                        });
+
+                        logger.info('玩家离开房间(断开连接)', {
+                            socketId: socket.id,
+                            roomId: room._id,
+                            userId: socket.user._id,
+                            username: socket.user.username,
+                            timestamp: new Date().toISOString()
+                        });
+                    }
+                }
+            } catch (error) {
+                logger.error('处理断开连接失败:', error);
             }
         });
 
@@ -795,191 +830,161 @@ class LobbyHandler {
         });
 
         // 确认英雄选择
-        socket.on('confirmHeroSelection', async (data, callback) => {
+        socket.on('confirmHeroSelection', async ({ roomId, heroId }) => {
             try {
-                const { roomId, heroId } = data;
+                // 获取用户ID
+                const userId = socket.user._id;
                 
-                logger.info('确认英雄选择', {
-                    userId: socket.user._id,
+                logger.info('玩家确认英雄选择:', {
+                    userId,
                     username: socket.user.username,
                     roomId,
                     heroId
                 });
 
-                // 获取房间信息
-                const room = await Room.findById(roomId);
-                if (!room) {
-                    throw new CustomError(404, '房间不存在');
-                }
-                
-                // 检查房间状态
-                if (room.status !== 'selecting') {
-                    throw new CustomError(400, '当前不是英雄选择阶段');
-                }
-                
-                // 获取当前玩家
-                const player = room.players.find(p => 
-                    p.userId.toString() === socket.user._id.toString()
-                );
-                
-                if (!player) {
-                    throw new CustomError(400, '您不在该房间中');
-                }
-                
-                // 检查是否是可选英雄
-                if (!player.availableHeroes.includes(heroId)) {
-                    logger.error('无效的英雄选择', {
-                        userId: socket.user._id,
-                        heroId,
-                        availableHeroes: player.availableHeroes
-                    });
-                    throw new CustomError(400, '无效的英雄选择');
-                }
-                
-                // 更新玩家选择的英雄
-                player.selectedHero = heroId;
-                await room.save();
-                
-                logger.info('玩家选择英雄成功', {
-                    userId: socket.user._id,
-                    roomId,
-                    heroId
-                });
-
-                // 让机器人选择英雄
-                const updatedRoom = await lobbyService.assignHeroesToBots(roomId);
-                
-                // 检查机器人选择结果
-                logger.info('机器人选择后的房间状态:', {
-                    roomId,
-                    totalPlayers: updatedRoom.players.length,
-                    selectedCount: updatedRoom.players.filter(p => p.selectedHero).length,
-                    botStats: {
-                        total: updatedRoom.players.filter(p => p.isBot).length,
-                        selected: updatedRoom.players.filter(p => p.isBot && p.selectedHero).length,
-                        remaining: updatedRoom.players.filter(p => p.isBot && !p.selectedHero).length
+                // 查找并更新房间
+                const room = await Room.findOneAndUpdate(
+                    { 
+                        _id: roomId,
+                        'players.userId': userId 
                     },
-                    players: updatedRoom.players.map(p => ({
+                    {
+                        $set: {
+                            'players.$.selectedHero': heroId,
+                            'players.$.ready': true
+                        }
+                    },
+                    { new: true } // 返回更新后的文档
+                );
+
+                if (!room) {
+                    throw new Error('房间不存在或您不在该房间中');
+                }
+
+                // 检查是否所有玩家都已选择英雄
+                const allSelected = room.players.every(p => p.selectedHero);
+                
+                logger.info('检查英雄选择状态:', {
+                    roomId,
+                    totalPlayers: room.players.length,
+                    selectedCount: room.players.filter(p => p.selectedHero).length,
+                    allSelected,
+                    players: room.players.map(p => ({
+                        userId: p.userId,
                         username: p.username,
-                        isBot: p.isBot,
-                        hasSelected: !!p.selectedHero,
-                        selectedHero: p.selectedHero
+                        selectedHero: p.selectedHero,
+                        isBot: p.isBot || (typeof p.userId === 'string' && p.userId.startsWith('BOT_'))
                     }))
                 });
-                
-                // 通知其他玩家机器人的选择
-                updatedRoom.players
-                    .filter(p => p.isBot && p.selectedHero)
-                    .forEach(bot => {
-                        this.io.to(`room:${roomId}`).emit('playerSelectedHero', {
-                            userId: bot.userId,
-                            username: bot.username,
-                            heroId: bot.selectedHero
-                        });
-                    });
-                
-                // 检查是否所有玩家都已选择英雄
-                const allSelected = updatedRoom.players.every(p => p.selectedHero);
-                
-                logger.info('最终选择状态:', {
-                    roomId,
-                    allSelected,
-                    totalPlayers: updatedRoom.players.length,
-                    selectedCount: updatedRoom.players.filter(p => p.selectedHero).length,
-                    playerStats: {
-                        total: updatedRoom.players.length,
-                        humans: updatedRoom.players.filter(p => !p.isBot).length,
-                        bots: updatedRoom.players.filter(p => p.isBot).length,
-                        selectedHumans: updatedRoom.players.filter(p => !p.isBot && p.selectedHero).length,
-                        selectedBots: updatedRoom.players.filter(p => p.isBot && p.selectedHero).length,
-                        remaining: updatedRoom.players.filter(p => !p.selectedHero).map(p => ({
-                            username: p.username,
-                            isBot: p.isBot
-                        }))
-                    }
+
+                // 广播选择结果
+                this.io.to(`room:${roomId}`).emit('heroSelectionUpdated', {
+                    userId,
+                    heroId,
+                    allSelected
                 });
 
+                // 如果所有玩家都已选择，则开始游戏
                 if (allSelected) {
-                    logger.info('所有玩家已选择英雄，游戏开始', {
+                    logger.info('所有玩家已选择英雄，准备开始游戏:', {
                         roomId,
-                        players: updatedRoom.players.map(p => ({
+                        players: room.players.map(p => ({
                             userId: p.userId,
                             username: p.username,
-                            heroId: p.selectedHero
+                            heroId: p.selectedHero,
+                            isBot: p.isBot || (typeof p.userId === 'string' && p.userId.startsWith('BOT_'))
                         }))
                     });
 
-                    // 更新房间状态为游戏中
-                    updatedRoom.status = 'playing';
-                    // 初始化游戏数据
-                    const gameInitData = {
-                        roomId: updatedRoom._id,
-                        players: await Promise.all(updatedRoom.players.map(async p => {
-                            const hero = await Hero.findById(p.selectedHero);
-                            return {
-                                userId: p.userId,
-                                username: p.username,
-                                hero: {
-                                    id: hero._id,
-                                    name: hero.name,
-                                    ability: hero.ability,
-                                    powerCost: hero.ability?.cost || 2
-                                },
-                                health: 40,
-                                coins: 3,
-                                tavernTier: 1,
-                                board: {},
-                                handCards: [],
-                                isBot: p.userId.startsWith('BOT_')
-                            };
+                    // 更新房间状态
+                    await Room.updateOne(
+                        { _id: roomId },
+                        { 
+                            $set: { 
+                                status: 'playing',
+                                gameStarted: true,
+                                gameStartTime: new Date()
+                            } 
+                        }
+                    );
+
+                    // 获取最终的房间状态
+                    const finalRoom = await Room.findById(roomId).lean();
+                    
+                    // 准备游戏初始数据
+                    const gameStartData = {
+                        roomId,
+                        gameId: finalRoom._id,
+                        players: finalRoom.players.map(p => ({
+                            userId: p.userId,
+                            username: p.username,
+                            heroId: p.selectedHero,
+                            isBot: p.isBot || (typeof p.userId === 'string' && p.userId.startsWith('BOT_')),
+                            health: 40,
+                            coins: 3,
+                            tavernTier: 1,
+                            board: [],
+                            hand: []
                         })),
                         turn: 1,
                         phase: 'preparation',
-                        shopCards: [], // 将在游戏服务中生成
-                        maxTavernTier: 6
+                        startTime: finalRoom.gameStartTime
                     };
-
-                    await updatedRoom.save();
                     
-                    // 通知所有玩家游戏开始
-                    this.io.to(`room:${roomId}`).emit('gameStart', {
+                    logger.info('发送游戏开始事件:', {
                         roomId,
-                        gameData: gameInitData
+                        gameStartData
                     });
-                } else {
-                    logger.info('等待其他玩家选择英雄', {
-                        roomId,
-                        selectedCount: updatedRoom.players.filter(p => p.selectedHero).length,
-                        totalPlayers: updatedRoom.players.length,
-                        stats: {
-                            totalBots: updatedRoom.players.filter(p => p.isBot).length,
-                            selectedBots: updatedRoom.players.filter(p => p.isBot && p.selectedHero).length,
-                            remainingBots: updatedRoom.players.filter(p => p.isBot && !p.selectedHero).length,
-                            remainingHumans: updatedRoom.players.filter(p => !p.isBot && !p.selectedHero).length
+                    
+                    // 广播游戏开始事件
+                    this.io.to(`room:${roomId}`).emit('gameStart', gameStartData);
+
+                    // 将所有玩家从大厅房间移动到游戏房间
+                    const players = room.players.map(p => p.userId.toString());
+                    players.forEach(playerId => {
+                        const playerSocket = this.io.sockets.sockets.get(
+                            Array.from(this.io.sockets.sockets.keys()).find(
+                                id => this.io.sockets.sockets.get(id).user?._id.toString() === playerId
+                            )
+                        );
+                        if (playerSocket) {
+                            playerSocket.leave(`room:${room._id}`);
+                            playerSocket.join(`game:${gameStartData.gameId}`);
                         }
                     });
 
-                    // 通知其他玩家当前玩家已选择英雄
-                    socket.to(`room:${roomId}`).emit('playerSelectedHero', {
-                        userId: socket.user._id,
-                        username: socket.user.username,
-                        heroId
+                    // 更新房间状态
+                    room.status = 'playing';
+                    await room.save();
+
+                } else {
+                    logger.info('等待其他玩家选择英雄:', {
+                        roomId,
+                        waitingPlayers: room.players
+                            .filter(p => !p.selectedHero)
+                            .map(p => ({
+                                userId: p.userId,
+                                username: p.username,
+                                isBot: p.isBot || (typeof p.userId === 'string' && p.userId.startsWith('BOT_'))
+                            }))
                     });
                 }
-                
-                callback({ 
+
+                // 发送确认响应
+                socket.emit('heroSelectionConfirmed', {
                     success: true,
                     data: {
-                        hero: await heroService.getHeroById(heroId),
-                        status: 'waiting_others'
+                        userId,
+                        heroId,
+                        allSelected
                     }
                 });
-                
+
             } catch (error) {
                 logger.error('确认英雄选择失败:', error);
-                callback({ 
-                    success: false, 
-                    error: error.message 
+                socket.emit('error', {
+                    message: '确认英雄选择失败',
+                    details: error.message
                 });
             }
         });

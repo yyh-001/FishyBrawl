@@ -3,6 +3,8 @@ const Room = require('../models/room');
 const User = require('../models/user');
 const heroService = require('./heroService');
 const logger = require('../utils/logger');
+const Bot = require('../models/bot');
+const lobbyService = require('./lobbyService');
 
 const BOT_NAMES = ['张三', '李四', '王五', '赵六', '老王', '小李', '阿伟', '老张', '小王', '大勇', '老地', '林伟', '杨鹰', '徐超', '李黑', '赵强', '张天', '老鹰', '赵地', '张黑'];
 
@@ -31,22 +33,14 @@ class MatchService {
 
     const bots = [];
     for (let i = 0; i < count; i++) {
-      const timestamp = Date.now();
-      const botId = `BOT_${timestamp}_${Math.random().toString(36).substr(2, 9)}`;
-      // 生成两字机器人名字
-      const firstName = this.BOT_FIRST_NAMES[Math.floor(Math.random() * this.BOT_FIRST_NAMES.length)];
-      const secondName = this.BOT_SECOND_NAMES[Math.floor(Math.random() * this.BOT_SECOND_NAMES.length)];
-      const botName = `${firstName}${secondName}`;
-
-      const bot = {
-        userId: botId,
-        username: botName,
+      const bot = await lobbyService.createBot();
+      bots.push({
+        userId: bot.botId,
+        username: bot.username,
         isBot: true,
         ready: true,
-        availableHeroes: await heroService.getRandomHeroes(4).then(heroes => heroes.map(h => h._id))
-      };
-      
-      bots.push(bot);
+        availableHeroes: bot.availableHeroes
+      });
     }
 
     return bots;

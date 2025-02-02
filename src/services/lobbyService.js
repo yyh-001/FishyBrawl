@@ -6,6 +6,7 @@ const logger = require('../utils/logger');
 const Hero = require('../models/hero');
 const matchService = require('./matchService');
 const Bot = require('../models/bot');
+const heroService = require('./heroService');
 
 class LobbyService {
     constructor() {
@@ -304,19 +305,26 @@ class LobbyService {
         try {
             const timestamp = Date.now();
             const ratingVariation = Math.floor(Math.random() * 100) - 50; // -50 到 50 的随机值
+            
             // 生成两字机器人名字
             const firstName = this.BOT_FIRST_NAMES[Math.floor(Math.random() * this.BOT_FIRST_NAMES.length)];
             const secondName = this.BOT_SECOND_NAMES[Math.floor(Math.random() * this.BOT_SECOND_NAMES.length)];
             const username = `${firstName}${secondName}`;
 
-            // 创建机器人对象
+            // 生成唯一的机器人ID
             const botId = `BOT_${timestamp}_${Math.random().toString(36).substr(2, 9)}`;
-            const bot = {
+            
+            // 获取随机英雄
+            const availableHeroes = await heroService.getRandomHeroes(4)
+                .then(heroes => heroes.map(h => h._id));
+
+            // 创建机器人记录在 Bot 表中
+            const bot = await Bot.create({
                 botId,
                 username,
                 rating: targetRating + ratingVariation,
-                isBot: true
-            };
+                availableHeroes
+            });
 
             logger.info('机器人创建成功', {
                 version: this.version,
@@ -325,7 +333,19 @@ class LobbyService {
                 rating: bot.rating
             });
 
-            return bot;
+            // 删除可能存在的旧的机器人用户数据
+            await User.deleteMany({ 
+                email: { $regex: /^bot_.*@example\.com$/ },
+                createdAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } // 删除24小时前的
+            });
+
+            return {
+                botId: bot.botId,
+                username: bot.username,
+                rating: bot.rating,
+                isBot: true,
+                availableHeroes: bot.availableHeroes
+            };
         } catch (error) {
             logger.error('创建机器人失败:', error);
             throw error;
@@ -425,7 +445,9 @@ class LobbyService {
                     username: playerIds.find(p => p.botId === botId)?.username || '机器人',
                     ready: true,
                     isBot: true,
-                    availableHeroes: playerHeroes.get(botId) || []
+                    availableHeroes: playerHeroes.get(botId) || [],
+                    // 为机器人自动选择英雄
+                    selectedHero: playerHeroes.get(botId)?.[Math.floor(Math.random() * 4)]._id
                 }))
             ],
             status: 'selecting',
@@ -443,7 +465,8 @@ class LobbyService {
             players: room.players.map(p => ({
                 userId: p.userId,
                 username: p.username,
-                isBot: p.isBot
+                isBot: p.isBot,
+                selectedHero: p.selectedHero
             }))
         });
         
@@ -879,23 +902,52 @@ class LobbyService {
             }));
 
             // 重新获取更新后的房间数据
-            const updatedRoom = await Room.findById(roomId);
+            const updatedRoom = await Room.findById(roomId).lean(); // 使用 lean() 显式获取普通 JS 对象
             
             // 检查是否所有玩家都已选择英雄
             const allSelected = updatedRoom.players.every(p => p.selectedHero);
-            logger.info('机器人选择完成后的状态:', {
-                roomId,
-                totalPlayers: updatedRoom.players.length,
-                selectedCount: updatedRoom.players.filter(p => p.selectedHero).length,
-                allSelected,
-                players: updatedRoom.players.map(p => ({
-                    username: p.username,
-                    isBot: p.isBot || (typeof p.userId === 'string' && p.userId.startsWith('bot_')),
-                    hasSelected: !!p.selectedHero
-                }))
-            });
+            
+            // 如果所有玩家都选择了英雄,更新房间状态为 playing
+            if (allSelected) {
+                // 使用 updateOne 而不是 save
+                const result = await Room.updateOne(
+                    { _id: roomId },
+                    { 
+                        $set: { 
+                            status: 'playing',
+                            gameStarted: true,
+                            gameStartTime: new Date()
+                        } 
+                    }
+                );
 
-            return updatedRoom;
+                // 再次获取更新后的房间数据
+                const finalRoom = await Room.findById(roomId).lean();
+
+                logger.info('所有玩家已选择英雄,游戏开始', {
+                    roomId,
+                    players: finalRoom.players.map(p => ({
+                        userId: p.userId,
+                        username: p.username,
+                        heroId: p.selectedHero,
+                        isBot: p.isBot || (typeof p.userId === 'string' && p.userId.startsWith('BOT_'))
+                    })),
+                    updateResult: result
+                });
+
+                // 返回最终的房间状态
+                return {
+                    ...finalRoom,
+                    gameStarted: true
+                };
+            }
+
+            // 如果还没有全部选择完,返回当前状态
+            return {
+                ...updatedRoom,
+                gameStarted: false
+            };
+
         } catch (error) {
             logger.error('机器人选择英雄失败:', error);
             throw error;
