@@ -7,6 +7,7 @@ const http = require('http');
 const initializeSocket = require('./config/socket');
 const LobbyHandler = require('./socket/lobbyHandler');
 const FriendHandler = require('./socket/friendHandler');
+const GameHandler = require('./socket/gameHandler');
 require('dotenv').config();
 
 const connectDB = require('./config/database');
@@ -82,6 +83,7 @@ app.use(errorHandler);
 // 初始化 WebSocket 处理器
 const lobbyHandler = new LobbyHandler(io);
 const friendHandler = new FriendHandler(io);
+const gameHandler = new GameHandler(io);
 
 // WebSocket 连接处理
 io.on('connection', (socket) => {
@@ -96,6 +98,9 @@ io.on('connection', (socket) => {
     
     // 初始化好友处理器
     friendHandler.initialize(socket);
+
+    // 初始化游戏处理器
+    gameHandler.initialize(socket);
     
     // 将用户加入到专属房间
     socket.join(`user:${socket.user._id}`);

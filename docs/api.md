@@ -1819,3 +1819,55 @@ socket.on('gameOver', (data) => {
    - 保存当前游戏状态
    - 重连后同步最新状态
    - 准备阶段计时不暂停
+
+### WebSocket 游戏接口
+
+#### 1. 刷新商店
+```javascript
+socket.emit('refreshShop', {
+    roomId: 'room_id'
+}, (response) => {
+    console.log(response);
+});
+```
+
+**成功响应**:
+```javascript
+{
+    success: true,
+    data: {
+        minions: [
+            {
+                minionId: "minion1",
+                name: "鱼人斥候",
+                attack: 2,
+                health: 1,
+                tier: 1,
+                tribe: "murloc",
+                abilities: ["charge"],
+                battlecry: null,
+                deathrattle: null,
+                description: "冲锋"
+            }
+            // ... 其他随从
+        ],
+        refreshCost: 1,
+        remainingCoins: 2
+    }
+}
+```
+
+**错误响应**:
+```javascript
+{
+    success: false,
+    error: "错误信息",
+    code: 400 // 错误代码
+}
+```
+
+**可能的错误**:
+- INSUFFICIENT_COINS: 金币不足
+- NOT_PREPARATION_PHASE: 不在准备阶段
+- ROOM_NOT_FOUND: 房间不存在
+- NOT_IN_ROOM: 您不在该房间中

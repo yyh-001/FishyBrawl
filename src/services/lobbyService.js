@@ -306,10 +306,21 @@ class LobbyService {
             const timestamp = Date.now();
             const ratingVariation = Math.floor(Math.random() * 100) - 50; // -50 到 50 的随机值
             
-            // 生成两字机器人名字
-            const firstName = this.BOT_FIRST_NAMES[Math.floor(Math.random() * this.BOT_FIRST_NAMES.length)];
-            const secondName = this.BOT_SECOND_NAMES[Math.floor(Math.random() * this.BOT_SECOND_NAMES.length)];
-            const username = `${firstName}${secondName}`;
+            // 生成机器人名字
+            const firstNames = ['小', '大', '老', '阿', '张', '李', '王', '赵', '刘', '陈', '杨', '黄', '周', '吴', '林', '徐'];
+            const secondNames = ['白', '黑', '红', '明', '强', '伟', '华', '勇', '超', '龙', '虎', '鹰', '风', '云', '天', '地'];
+            
+            // 获取已存在的机器人名字
+            const existingBots = await Bot.find({}, 'username');
+            const existingNames = new Set(existingBots.map(bot => bot.username));
+            
+            // 生成唯一名字
+            let randomName;
+            do {
+                const firstName = firstNames[Math.floor(Math.random() * firstNames.length)];
+                const secondName = secondNames[Math.floor(Math.random() * secondNames.length)];
+                randomName = `${firstName}${secondName}`;
+            } while (existingNames.has(randomName));
 
             // 生成唯一的机器人ID
             const botId = `BOT_${timestamp}_${Math.random().toString(36).substr(2, 9)}`;
@@ -319,24 +330,21 @@ class LobbyService {
                 .then(heroes => heroes.map(h => h._id));
 
             // 创建机器人记录在 Bot 表中
-            const bot = await Bot.create({
+            const bot = new Bot({
                 botId,
-                username,
+                username: randomName,
                 rating: targetRating + ratingVariation,
-                availableHeroes
+                availableHeroes,
+                isBot: true
             });
+
+            await bot.save();
 
             logger.info('机器人创建成功', {
                 version: this.version,
                 botId: bot.botId,
                 username: bot.username,
                 rating: bot.rating
-            });
-
-            // 删除可能存在的旧的机器人用户数据
-            await User.deleteMany({ 
-                email: { $regex: /^bot_.*@example\.com$/ },
-                createdAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } // 删除24小时前的
             });
 
             return {
@@ -421,12 +429,10 @@ class LobbyService {
             playerHeroes.set(playerId.toString(), availableHeroes);
         }
         
-        // 处理机器人
-        for (const botId of botIds) {
-            const shuffled = [...heroes].sort(() => 0.5 - Math.random());
-            const availableHeroes = shuffled.slice(0, 4);
-            playerHeroes.set(botId, availableHeroes);
-        }
+        // 获取机器人信息
+        const bots = await Bot.find({ 
+            botId: { $in: botIds }
+        }).lean();
 
         // 创建房间
         const room = new Room({
@@ -440,14 +446,14 @@ class LobbyService {
                     isBot: false,
                     availableHeroes: playerHeroes.get(p._id.toString()) || []
                 })),
-                ...botIds.map(botId => ({
-                    userId: botId,
-                    username: playerIds.find(p => p.botId === botId)?.username || '机器人',
+                ...bots.map(bot => ({
+                    userId: bot.botId,
+                    username: bot.username,  // 使用保存的机器人名字
                     ready: true,
                     isBot: true,
-                    availableHeroes: playerHeroes.get(botId) || [],
+                    availableHeroes: playerHeroes.get(bot.botId) || [],
                     // 为机器人自动选择英雄
-                    selectedHero: playerHeroes.get(botId)?.[Math.floor(Math.random() * 4)]._id
+                    selectedHero: playerHeroes.get(bot.botId)?.[Math.floor(Math.random() * 4)]._id
                 }))
             ],
             status: 'selecting',
