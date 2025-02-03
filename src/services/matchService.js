@@ -5,13 +5,14 @@ const heroService = require('./heroService');
 const logger = require('../utils/logger');
 const Bot = require('../models/bot');
 const lobbyService = require('./lobbyService');
+const gameConfig = require('../config/gameConfig');
 
 const BOT_NAMES = ['张三', '李四', '王五', '赵六', '老王', '小李', '阿伟', '老张', '小王', '大勇', '老地', '林伟', '杨鹰', '徐超', '李黑', '赵强', '张天', '老鹰', '赵地', '张黑'];
 
 class MatchService {
   constructor() {
     this.matchingPlayers = new Map();
-    this.matchingTimeout = 30000; // 30秒匹配超时
+    this.matchingTimeout = gameConfig.BOT.WAIT_TIME; // 使用配置的等待时间
     this.version = '1.0.2';
     // 机器人名字生成配置
     this.BOT_FIRST_NAMES = [
@@ -22,7 +23,7 @@ class MatchService {
       '白', '黑', '红', '明', '强', '伟', '华', '勇',
       '超', '龙', '虎', '鹰', '风', '云', '天', '地'
     ];
-    logger.info(`MatchService initialized - Version ${this.version}`);
+    logger.info(`MatchService initialized - Version ${this.version}, Timeout: ${this.matchingTimeout}ms`);
   }
 
   // 创建机器人玩家
@@ -180,7 +181,10 @@ class MatchService {
   // 开始匹配
   async startMatching(userId) {
     try {
-      logger.info(`MatchService Version ${this.version} - Starting Match`);
+      logger.info(`MatchService Version ${this.version} - Starting Match`, {
+        userId,
+        timeout: this.matchingTimeout
+      });
       // 检查玩家是否已在匹配中
       if (this.matchingPlayers.has(userId)) {
         return { success: false, message: '您已在匹配队列中' };
@@ -195,7 +199,8 @@ class MatchService {
       logger.info('玩家开始匹配', {
         version: this.version,
         userId,
-        queueSize: this.matchingPlayers.size
+        queueSize: this.matchingPlayers.size,
+        timeout: this.matchingTimeout
       });
 
       // 检查是否可以立即匹配
@@ -231,7 +236,9 @@ class MatchService {
     this.matchingPlayers.delete(userId);
     logger.info('玩家匹配超时', {
       userId,
-      queueSize: this.matchingPlayers.size
+      queueSize: this.matchingPlayers.size,
+      timeout: this.matchingTimeout,
+      configTimeout: gameConfig.BOT.WAIT_TIME
     });
   }
 

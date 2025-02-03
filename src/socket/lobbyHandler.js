@@ -6,6 +6,7 @@ const User = require('../models/user');
 const CustomError = require('../utils/customError');
 const Hero = require('../models/hero');
 const shopService = require('../services/shopService');
+const gameConfig = require('../config/gameConfig');
 
 class LobbyHandler {
     constructor(io) {
@@ -820,7 +821,7 @@ class LobbyHandler {
                     success: true, 
                     data: { 
                         heroes,
-                        selectionTimeLimit: 30 // 30秒选择时间
+                        selectionTimeLimit: gameConfig.TIME_LIMITS.HERO_SELECTION // 使用配置的时间
                     } 
                 });
             } catch (error) {
@@ -1023,6 +1024,7 @@ class LobbyHandler {
         try {
             logger.info('开始英雄选择阶段:', {
                 roomId: room._id,
+                duration: gameConfig.TIME_LIMITS.HERO_SELECTION,
                 timestamp: new Date().toISOString()
             });
 
@@ -1052,10 +1054,10 @@ class LobbyHandler {
                 });
             }
 
-            // 设置30秒选择时间
+            // 使用配置的选择时间
             setTimeout(async () => {
                 await this.endHeroSelection(room._id);
-            }, 30000);
+            }, gameConfig.TIME_LIMITS.HERO_SELECTION * 1000);
 
         } catch (error) {
             logger.error('开始英雄选择失败:', {
@@ -1151,30 +1153,37 @@ class LobbyHandler {
         return null;
     }
 
-    // 开始英雄选择倒计时
+    // 开始英雄选择计时
     startHeroSelectionTimer(roomId) {
-        // 清除已存在的倒计时
-        if (this.selectionTimers[roomId]) {
-            clearTimeout(this.selectionTimers[roomId]);
-        }
+        logger.info('开始英雄选择计时:', {
+            roomId,
+            duration: gameConfig.TIME_LIMITS.HERO_SELECTION
+        });
 
-        const SELECTION_TIME = 30000; // 30秒
-        let timeRemaining = SELECTION_TIME;
-        
-        // 每秒广播剩余时间
-        const intervalId = setInterval(() => {
-            timeRemaining -= 1000;
-            this.io.to(`room:${roomId}`).emit('heroSelectionTimeUpdate', {
-                timeRemaining: Math.max(0, timeRemaining)
-            });
-        }, 1000);
+        // 使用配置的英雄选择时间
+        setTimeout(async () => {
+            try {
+                const room = await Room.findById(roomId);
+                if (!room || room.status !== 'selecting') {
+                    return;
+                }
 
-        // 设置倒计时结束的处理
-        this.selectionTimers[roomId] = setTimeout(async () => {
-            clearInterval(intervalId);
-            await this.handleTimeUp(roomId);
-            delete this.selectionTimers[roomId];
-        }, SELECTION_TIME);
+                logger.info('英雄选择时间到:', {
+                    roomId,
+                    configDuration: gameConfig.TIME_LIMITS.HERO_SELECTION
+                });
+
+                // 为未选择英雄的玩家随机选择
+                await this.handleHeroSelectionTimeout(room);
+
+            } catch (error) {
+                logger.error('英雄选择超时处理失败:', {
+                    roomId,
+                    error: error.message,
+                    stack: error.stack
+                });
+            }
+        }, gameConfig.TIME_LIMITS.HERO_SELECTION * 1000);  // 转换为毫秒
     }
 
     // 处理倒计时结束
@@ -1302,9 +1311,9 @@ class LobbyHandler {
                         username: p.username,
                         heroId: p.selectedHero,
                         isBot: p.isBot || (typeof p.userId === 'string' && p.userId.startsWith('BOT_')),
-                        health: 40,
-                        coins: 3,
-                        tavernTier: 1,
+                        health: gameConfig.INITIAL_HEALTH,  // 使用配置的初始生命值
+                        coins: gameConfig.INITIAL_COINS,    // 使用配置的初始金币
+                        tavernTier: gameConfig.INITIAL_TAVERN_TIER,
                         board: [],
                         hand: [],
                         hero: {
@@ -1335,10 +1344,42 @@ class LobbyHandler {
                     userId: p.userId,
                     username: p.username,
                     heroName: p.hero.name,
-                    ability: p.hero.ability.name
-                }))
+                    ability: p.hero.ability.name,
+                    initialCoins: p.coins,  // 添加初始金币
+                    initialHealth: p.health,  // 添加初始生命值
+                    tavernTier: p.tavernTier  // 添加酒馆等级
+                })),
+                gameConfig: {  // 添加游戏配置信息
+                    initialCoins: gameConfig.INITIAL_COINS,
+                    refreshCost: gameConfig.REFRESH_COST,
+                    minionPurchaseCost: gameConfig.MINION_PURCHASE_COST,
+                    minionSellRefund: gameConfig.MINION_SELL_REFUND
+                },
+                timestamp: new Date().toISOString()
             });
             
+            // 在发送游戏开始事件前记录详细日志
+            logger.debug('准备发送游戏开始事件:', {
+                roomId: room._id,
+                gameId: gameStartData.gameId,
+                playerDetails: gameStartData.players.map(p => ({
+                    userId: p.userId,
+                    username: p.username,
+                    isBot: p.isBot,
+                    coins: p.coins,
+                    health: p.health,
+                    tavernTier: p.tavernTier,
+                    hero: {
+                        name: p.hero.name,
+                        ability: p.hero.ability.name
+                    }
+                })),
+                phase: gameStartData.phase,
+                turn: gameStartData.turn,
+                startTime: gameStartData.startTime,
+                timestamp: new Date().toISOString()
+            });
+
             // 广播游戏开始事件
             this.io.to(`room:${room._id}`).emit('gameStart', gameStartData);
             logger.debug('已发送游戏开始事件');
@@ -1393,6 +1434,53 @@ class LobbyHandler {
                 }))
             });
             throw error;
+        }
+    }
+
+    // 处理英雄选择超时
+    async handleHeroSelectionTimeout(room) {
+        try {
+            logger.info('英雄选择超时处理:', {
+                roomId: room._id,
+                configDuration: gameConfig.TIME_LIMITS.HERO_SELECTION,
+                timestamp: new Date().toISOString()
+            });
+
+            // 为未选择英雄的玩家随机分配英雄
+            const unselectedPlayers = room.players.filter(p => !p.selectedHero);
+            
+            for (const player of unselectedPlayers) {
+                // 随机选择一个英雄
+                const randomHero = await Hero.aggregate([
+                    { $sample: { size: 1 } }
+                ]);
+
+                if (randomHero.length > 0) {
+                    player.selectedHero = randomHero[0]._id;
+                    player.ready = true;
+
+                    // 通知玩家被随机分配了英雄
+                    this.io.to(`room:${room._id}`).emit('heroSelectionUpdated', {
+                        userId: player.userId,
+                        heroId: randomHero[0]._id,
+                        isAutoSelected: true
+                    });
+                }
+            }
+
+            // 保存更新后的房间
+            await room.save();
+
+            // 开始游戏
+            await this.startGame(room);
+
+        } catch (error) {
+            logger.error('处理英雄选择超时失败:', {
+                roomId: room._id,
+                error: error.message,
+                stack: error.stack,
+                configDuration: gameConfig.TIME_LIMITS.HERO_SELECTION
+            });
         }
     }
 }

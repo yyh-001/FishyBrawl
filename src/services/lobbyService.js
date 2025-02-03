@@ -7,6 +7,7 @@ const Hero = require('../models/hero');
 const matchService = require('./matchService');
 const Bot = require('../models/bot');
 const heroService = require('./heroService');
+const gameConfig = require('../config/gameConfig');
 
 class LobbyService {
     constructor() {
@@ -176,7 +177,6 @@ class LobbyService {
 
     // 匹配检查
     async checkMatching() {
-        const BOT_WAIT_TIME = 15000; // 等待15秒后加入机器人
         const now = new Date();
 
         // 获取所有正在匹配的玩家
@@ -187,9 +187,10 @@ class LobbyService {
         // 检查是否有玩家等待时间过长
         for (const player of matchingPlayers) {
             const waitTime = now - player.startTime;
-            if (waitTime >= BOT_WAIT_TIME) {
+            if (waitTime >= gameConfig.BOT.WAIT_TIME) {  // 使用配置的等待时间
                 logger.info('匹配等待超时,添加机器人', {
                     waitTime,
+                    configWaitTime: gameConfig.BOT.WAIT_TIME,
                     playerCount: matchingPlayers.length,
                     userId: player.userId
                 });
@@ -976,7 +977,8 @@ class LobbyService {
                 version: this.version,
                 userId,
                 playerCount: 1,
-                waitTime
+                waitTime,
+                configWaitTime: gameConfig.BOT.WAIT_TIME
             });
 
             // 使用 matchService 创建带机器人的房间

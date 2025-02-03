@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-
+const gameConfig = require('../config/gameConfig');
 const roomSchema = new mongoose.Schema({
     name: {
         type: String,
@@ -35,15 +35,15 @@ const roomSchema = new mongoose.Schema({
         },
         health: {
             type: Number,
-            default: 40
+            default: gameConfig.INITIAL_HEALTH
         },
         coins: {
             type: Number,
-            default: 3
+            default: gameConfig.INITIAL_COINS
         },
         tavernTier: {
             type: Number,
-            default: 1
+            default: gameConfig.INITIAL_TAVERN_TIER
         },
         board: [{
             type: Object

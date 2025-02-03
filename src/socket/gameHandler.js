@@ -2,6 +2,7 @@ const Room = require('../models/room');
 const logger = require('../utils/logger');
 const CustomError = require('../utils/customError');
 const shopService = require('../services/shopService');
+const gameConfig = require('../config/gameConfig');
 
 class GameHandler {
     constructor(io) {
@@ -14,51 +15,13 @@ class GameHandler {
             try {
                 const { roomId } = data;
                 
-                logger.info('玩家请求刷新商店:', {
-                    roomId: data.roomId,
-                    timestamp: new Date().toISOString(),
-                    userId: socket.user._id,
-                    username: socket.user.username
-                });
-
-                // 获取房间信息
+                // 获取最新的房间数据
                 const room = await Room.findById(roomId);
                 if (!room) {
                     throw new CustomError(404, '房间不存在');
                 }
 
-                // 打印详细的房间状态
-                logger.info('当前房间状态:', {
-                    roomId,
-                    status: room.status,
-                    phase: room.phase,
-                    turn: room.turn,
-                    playerCount: room.players.length,
-                    activePlayers: room.players.filter(p => !p.eliminated).length,
-                    timestamp: new Date().toISOString()
-                });
-
-                // 检查游戏状态和阶段
-                if (room.status !== 'playing') {
-                    logger.warn('游戏尚未开始:', {
-                        roomId,
-                        currentStatus: room.status,
-                        expectedStatus: 'playing'
-                    });
-                    throw new CustomError(400, '游戏尚未开始');
-                }
-
-                // 在 playing 状态下，根据 phase 判断是否可以操作
-                if (room.phase !== 'preparation') {
-                    logger.warn('当前不是准备阶段:', {
-                        roomId,
-                        currentPhase: room.phase,
-                        expectedPhase: 'preparation'
-                    });
-                    throw new CustomError(400, '当前不是准备阶段');
-                }
-
-                // 获取当前玩家
+                // 获取当前玩家的最新状态
                 const player = room.players.find(p => 
                     p.userId.toString() === socket.user._id.toString()
                 );
@@ -67,25 +30,29 @@ class GameHandler {
                     throw new CustomError(400, '您不在该房间中');
                 }
 
-                // 打印当前玩家状态
-                logger.info('当前玩家状态:', {
-                    roomId,
-                    userId: player.userId,
-                    username: player.username,
-                    coins: player.coins,
-                    tavernTier: player.tavernTier,
-                    health: player.health,
-                    eliminated: player.eliminated,
-                    timestamp: new Date().toISOString()
+                logger.info('刷新商店前状态:', {
+                    userId: socket.user._id,
+                    currentCoins: player.coins,
+                    refreshCost: gameConfig.REFRESH_COST
                 });
 
                 // 检查玩家金币是否足够
-                if (player.coins < 1) {
+                if (player.coins < gameConfig.REFRESH_COST) {
                     throw new CustomError(400, '金币不足');
                 }
 
+                // 扣除刷新费用
+                const remainingCoins = player.coins - gameConfig.REFRESH_COST;
+                
                 // 获取新的商店随从
                 const minions = await shopService.refreshShop(player.tavernTier);
+
+                logger.info('刷新商店结果:', {
+                    userId: socket.user._id,
+                    beforeCoins: player.coins,
+                    afterCoins: remainingCoins,
+                    minionsCount: minions.length
+                });
 
                 // 更新玩家金币和商店随从
                 await Room.updateOne(
@@ -95,28 +62,13 @@ class GameHandler {
                     },
                     {
                         $set: {
-                            'players.$.coins': player.coins - 1,
+                            'players.$.coins': remainingCoins,
                             'players.$.shopMinions': minions
                         }
                     }
                 );
 
-                logger.info('商店刷新成功:', {
-                    userId: socket.user._id,
-                    roomId,
-                    tavernTier: player.tavernTier,
-                    minions: minions.map(m => ({
-                        id: m._id,
-                        name: m.name,
-                        attack: m.attack,
-                        health: m.health,
-                        tier: m.tier,
-                        tribe: m.tribe,
-                        abilities: m.abilities,
-                        description: m.description
-                    }))
-                });
-
+                // 返回响应
                 callback({
                     success: true,
                     data: {
@@ -130,7 +82,7 @@ class GameHandler {
                             abilities: m.abilities,
                             description: m.description
                         })),
-                        remainingCoins: player.coins - 1
+                        remainingCoins
                     }
                 });
 
@@ -236,6 +188,7 @@ class GameHandler {
                 status: room.status,
                 phase: room.phase,
                 playerCount: room.players.length,
+                initialCoins: gameConfig.INITIAL_COINS,
                 timestamp: new Date().toISOString()
             });
 
@@ -245,25 +198,66 @@ class GameHandler {
                 throw new Error('房间不存在');
             }
 
-            // 验证房间状态
-            if (currentRoom.status !== 'playing' || currentRoom.phase !== 'preparation') {
-                logger.warn('房间状态不正确:', {
-                    roomId: currentRoom._id,
-                    status: currentRoom.status,
-                    phase: currentRoom.phase,
+            // 先更新所有玩家的初始状态
+            await Room.updateOne(
+                { _id: currentRoom._id },
+                { 
+                    $set: { 
+                        status: 'playing',
+                        phase: 'preparation',
+                        turn: 1,
+                        'players.$[].coins': gameConfig.INITIAL_COINS,  // 设置所有玩家的初始金币
+                        'players.$[].health': gameConfig.INITIAL_HEALTH,  // 设置所有玩家的初始生命值
+                        'players.$[].tavernTier': gameConfig.INITIAL_TAVERN_TIER  // 设置所有玩家的初始酒馆等级
+                    }
+                }
+            );
+
+            // 验证更新是否成功
+            const updatedRoom = await Room.findById(currentRoom._id);
+            for (const player of updatedRoom.players) {
+                logger.info('验证玩家初始状态:', {
+                    userId: player.userId,
+                    username: player.username,
+                    coins: player.coins,
+                    health: player.health,
+                    tavernTier: player.tavernTier,
+                    expectedCoins: gameConfig.INITIAL_COINS,
+                    expectedHealth: gameConfig.INITIAL_HEALTH,
+                    expectedTavernTier: gameConfig.INITIAL_TAVERN_TIER,
                     timestamp: new Date().toISOString()
                 });
-                
-                // 强制更新状态
-                await Room.updateOne(
-                    { _id: currentRoom._id },
-                    { 
-                        $set: { 
-                            status: 'playing',
-                            phase: 'preparation'
+
+                // 如果有任何值不正确，单独更新该玩家
+                if (player.coins !== gameConfig.INITIAL_COINS || 
+                    player.health !== gameConfig.INITIAL_HEALTH || 
+                    player.tavernTier !== gameConfig.INITIAL_TAVERN_TIER) {
+                    
+                    logger.warn('玩家状态不正确，正在修复:', {
+                        userId: player.userId,
+                        username: player.username,
+                        currentCoins: player.coins,
+                        currentHealth: player.health,
+                        currentTavernTier: player.tavernTier,
+                        expectedCoins: gameConfig.INITIAL_COINS,
+                        expectedHealth: gameConfig.INITIAL_HEALTH,
+                        expectedTavernTier: gameConfig.INITIAL_TAVERN_TIER
+                    });
+
+                    await Room.updateOne(
+                        { 
+                            _id: currentRoom._id,
+                            'players.userId': player.userId 
+                        },
+                        {
+                            $set: {
+                                'players.$.coins': gameConfig.INITIAL_COINS,
+                                'players.$.health': gameConfig.INITIAL_HEALTH,
+                                'players.$.tavernTier': gameConfig.INITIAL_TAVERN_TIER
+                            }
                         }
-                    }
-                );
+                    );
+                }
             }
 
             // 初始化游戏数据
@@ -295,28 +289,21 @@ class GameHandler {
         try {
             logger.info('开始初始化游戏数据:', {
                 roomId: room._id,
+                initialCoins: gameConfig.INITIAL_COINS,  // 记录使用的初始金币值
                 timestamp: new Date().toISOString()
             });
 
-            // 先更新房间状态，确保状态正确
+            // 先更新房间状态
             await Room.updateOne(
                 { _id: room._id },
                 { 
                     $set: { 
                         status: 'playing',
-                        phase: 'preparation',  // 确保设置为准备阶段
+                        phase: 'preparation',
                         turn: 1
                     }
                 }
             );
-
-            logger.info('房间状态已更新:', {
-                roomId: room._id,
-                status: 'playing',
-                phase: 'preparation',
-                turn: 1,
-                timestamp: new Date().toISOString()
-            });
 
             // 为每个玩家初始化游戏数据
             for (const player of room.players) {
@@ -324,6 +311,7 @@ class GameHandler {
                     roomId: room._id,
                     userId: player.userId,
                     username: player.username,
+                    initialCoins: gameConfig.INITIAL_COINS,
                     timestamp: new Date().toISOString()
                 });
 
@@ -338,9 +326,9 @@ class GameHandler {
                     },
                     {
                         $set: {
-                            'players.$.coins': 3,
-                            'players.$.health': 40,
-                            'players.$.tavernTier': 1,
+                            'players.$.coins': gameConfig.INITIAL_COINS,  // 使用配置的初始金币
+                            'players.$.health': gameConfig.INITIAL_HEALTH,  // 使用配置的初始生命值
+                            'players.$.tavernTier': gameConfig.INITIAL_TAVERN_TIER,  // 使用配置的初始酒馆等级
                             'players.$.board': [],
                             'players.$.hand': [],
                             'players.$.heroPowerUsed': false,
@@ -350,13 +338,29 @@ class GameHandler {
                     }
                 );
 
+                // 验证更新是否成功
+                const updatedPlayer = await Room.findOne(
+                    { 
+                        _id: room._id,
+                        'players.userId': player.userId 
+                    },
+                    { 'players.$': 1 }
+                );
+
+                logger.info('玩家初始化结果:', {
+                    userId: player.userId,
+                    coins: updatedPlayer.players[0].coins,
+                    expectedCoins: gameConfig.INITIAL_COINS,
+                    timestamp: new Date().toISOString()
+                });
+
                 // 通知玩家游戏开始
                 this.io.to(`user:${player.userId}`).emit('gameStarted', {
                     phase: 'preparation',
                     turn: 1,
-                    coins: 3,
-                    health: 40,
-                    tavernTier: 1,
+                    coins: gameConfig.INITIAL_COINS,
+                    health: gameConfig.INITIAL_HEALTH,
+                    tavernTier: gameConfig.INITIAL_TAVERN_TIER,
                     shopMinions
                 });
             }
@@ -386,7 +390,10 @@ class GameHandler {
     // 开始准备阶段
     async startPreparationPhase(roomId) {
         try {
-            logger.info('开始准备阶段:', { roomId });
+            logger.info('开始准备阶段:', { 
+                roomId,
+                initialCoins: gameConfig.INITIAL_COINS
+            });
 
             const room = await Room.findById(roomId);
             if (!room) {
@@ -403,9 +410,19 @@ class GameHandler {
             for (const player of room.players) {
                 if (player.eliminated) continue;
 
-                // 计算本回合金币数 (3 + 回合数，最多10)
-                const coins = Math.min(10, 3 + room.turn);
+                // 第一回合使用初始金币，之后每回合都是固定金币
+                const coins = room.turn === 1 ? gameConfig.INITIAL_COINS : 5;
                 
+                logger.info('设置玩家回合金币:', {
+                    userId: player.userId,
+                    username: player.username,
+                    turn: room.turn,
+                    isFirstTurn: room.turn === 1,
+                    initialCoins: gameConfig.INITIAL_COINS,
+                    calculatedCoins: coins,
+                    timestamp: new Date().toISOString()
+                });
+
                 // 刷新商店随从
                 const shopMinions = await shopService.refreshShop(player.tavernTier);
 
@@ -423,6 +440,24 @@ class GameHandler {
                         }
                     }
                 );
+
+                // 验证更新是否成功
+                const updatedPlayer = await Room.findOne(
+                    { 
+                        _id: roomId,
+                        'players.userId': player.userId 
+                    },
+                    { 'players.$': 1 }
+                );
+
+                logger.info('玩家回合初始化结果:', {
+                    userId: player.userId,
+                    username: player.username,
+                    turn: room.turn,
+                    expectedCoins: coins,
+                    actualCoins: updatedPlayer.players[0].coins,
+                    timestamp: new Date().toISOString()
+                });
 
                 // 通知玩家回合开始
                 this.io.to(`user:${player.userId}`).emit('preparationPhaseStarted', {
